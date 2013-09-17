@@ -310,12 +310,8 @@ make(Orig, Node, Domain, Resource) ->
 -spec(bare/1 :: (jid()) -> jid()).
 
 bare(#jid{raw = Orig_Jid} = Jid) ->
-    New_Orig_Jid = case binary_split(Orig_Jid, $/) of
-		       [Bare_Jid | _] -> Bare_Jid;
-		       [Bare_Jid]    -> Bare_Jid
-		   end,
     Jid#jid{
-      raw = New_Orig_Jid,
+      raw = hd(binary_split(Orig_Jid, $/)),
       resource = undefined
      }.
 
