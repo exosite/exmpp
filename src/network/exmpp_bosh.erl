@@ -32,7 +32,7 @@
 -include("exmpp.hrl").
 
 %% Behaviour exmpp_gen_transport ?
--export([connect/3,  send/2, close/2, reset_parser/1, get_property/2]).
+-export([connect/3,  send/2, close/2, reset_parser/1, get_property/2, wping/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -82,6 +82,10 @@ send(Pid, Packet) ->
 
 close(Pid, _) ->
     catch gen_server:call(Pid, stop).
+
+%% Don't send whitespace pings on BOSH
+wping(_Pid) ->
+	ok.
 
 %% don't do anything on init. We establish the connection when the stream start 
 %% is sent                                                                      
@@ -147,17 +151,17 @@ handle_cast({send, Packet}, State) ->
 handle_cast(_Cast, State) ->         
     {noreply, State}.                
 %{http_response, NewVsn, StatusCode, Reason}
-handle_info({http, Socket, {http_response, Vsn, 200, <<"OK">>}}, State) ->
+handle_info({http, Socket, {http_response, Vsn, 200, StatusText}}, State) ->
         #state{stream_ref = Stream,                                       
                 open = Open,                                              
                 sid = Sid,                                                
                 queue = Queue,                                            
                 parsed_bosh_url = {Host, _, Path, _},                     
                 rid = Rid} = State,                                       
-        {ok, {{200, <<"OK">>}, _Hdrs, Resp}} = read_response(Socket, Vsn, {200, <<"OK">>}, [], <<>>),
-        {ok, NewStream} = exmpp_xmlstream:parse(Stream, Resp),                                       
-        %io:format("Got: ~s \n", [Resp]),                                                            
-        NewOpen = lists:keydelete(Socket, 1, Open),                                                  
+        {ok, {{200, StatusText}, _Hdrs, Resp}} = read_response(Socket, Vsn, {200, StatusText}, [], <<>>),
+        {ok, NewStream} = exmpp_xmlstream:parse(Stream, Resp),
+        %io:format("Got: ~s \n", [Resp]),
+        NewOpen = lists:keydelete(Socket, 1, Open),
         NewState2  = if                                                                              
                      NewOpen == [] andalso State#state.new =:= false ->                              
                         %io:format("Making empty request\n"),                                        
@@ -208,8 +212,8 @@ make_request(Socket, Sid, Rid, Queue, Host, Path, Packet) when is_record(Packet,
 make_request(Socket,Host, Path, Body) ->                                                          
      Hdrs = [{"Content-Type", ?CONTENT_TYPE}, {"keep-alive", "true"}],                            
      Request = format_request(Path, "POST", Hdrs, Host, Body),                                    
-     ok = gen_tcp:send(Socket, Request).                                                          
-     %io:format("Sent: ~s \n", [Body]).                                                           
+     ok = gen_tcp:send(Socket, Request).
+     %io:format("Sent: ~s \n", [Body]).
 
 
 %% after stream restart, we must not sent this to the connection manager. The response is got in reset call
@@ -229,9 +233,9 @@ do_send(#xmlel{ns=?NS_XMPP, name='stream'}, State) ->
     NewState2 = return_socket(NewState, Socket), %%TODO: this can be improved.. don't close the socket and reuse it for latter
 
     [#xmlel{name=body} = BodyEl] = exmpp_xml:parse_document(Resp),
-    SID = exmpp_xml:get_attribute_as_binary(BodyEl, sid, undefined),
-    AuthID = exmpp_xml:get_attribute_as_binary(BodyEl,authid,undefined),
-    Requests = list_to_integer(exmpp_xml:get_attribute_as_list(BodyEl,requests,undefined)),
+    SID = exmpp_xml:get_attribute_as_binary(BodyEl, <<"sid">>, undefined),
+    AuthID = exmpp_xml:get_attribute_as_binary(BodyEl,<<"authid">>,undefined),
+    Requests = list_to_integer(exmpp_xml:get_attribute_as_list(BodyEl,<<"requests">>,undefined)),
     Events = [{xmlstreamelement, El} || El <- exmpp_xml:get_child_elements(BodyEl)],                                      
 
     % first return a fake stream response, then anything found inside the <body/> element (possibly nothing)
@@ -240,13 +244,31 @@ do_send(#xmlel{ns=?NS_XMPP, name='stream'}, State) ->
                 " xmlns:stream='http://etherx.jabber.org/streams' version='1.0'"                            
                 " from='" , Domain , "' id='" , AuthID , "'>"],                                             
     {ok, NewStreamRef} = exmpp_xmlstream:parse(StreamRef, StreamStart),                                     
-    exmpp_xmlstream:send_events(StreamRef, Events),                                                         
-        {noreply, NewState2#state{stream_ref = NewStreamRef,                                                
-                          rid = Rid +1,                                                                     
-                          open = [],                                                                        
-                          sid = SID,                                                                        
-                          max_requests = Requests,                                                          
-                          auth_id = AuthID}};                                                               
+    exmpp_xmlstream:send_events(NewStreamRef, Events),
+    % in case of empty <body/> events which would us make send request to server wouldn't be generated
+    % so we need to do that manually
+    NewState4 = if
+       Events == [] ->
+          {NewState3, Socket2} = new_socket(NewState2, once),
+          ok = make_empty_request(Socket2, SID, Rid+1, [], Host, Path),
+          %inet:setopts(Socket2, [{packet, http_bin}, {active, once}]),
+          NewState3#state{stream_ref = NewStreamRef,
+                          open = [{Socket2, Rid+1}],
+                          rid = Rid+2,
+                          sid = SID,
+                          max_requests = Requests,
+                          auth_id = AuthID,
+                          queue = []};
+       true ->
+          NewState2#state{stream_ref = NewStreamRef,
+                          rid = Rid+1,
+                          open = [],
+                          sid = SID,
+                          max_requests = Requests,
+                          auth_id = AuthID}
+    end,
+
+        {noreply, NewState4};
 
 do_send(Packet, State) ->
    #state{open = Open,   

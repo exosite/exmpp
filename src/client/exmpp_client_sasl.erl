@@ -43,7 +43,7 @@
 %% Feature announcement.
 %% --------------------------------------------------------------------
 
-%% @spec (Features_Annoucenement) -> Mechanisms
+%% @spec (Features_Announcement) -> Mechanisms
 %%     Features_Announcement = exmpp_xml:xmlel()
 %%     Mechanisms = [string()]
 %% @throws {sasl, announced_mechanisms, invalid_feature, Feature} |
@@ -88,7 +88,7 @@ selected_mechanism(Mechanism) ->
       ns = ?NS_SASL,
       name = 'auth'
      },
-    exmpp_xml:set_attribute(El, 'mechanism', Mechanism).
+    exmpp_xml:set_attribute(El, <<"mechanism">>, Mechanism).
 
 %% @spec (Mechanism, Initial_Response) -> Auth
 %%     Mechanism = string()

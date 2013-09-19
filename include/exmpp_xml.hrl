@@ -17,6 +17,7 @@
 
 % NS, element's name and attribute's name.
 -type(xmlname() :: atom() | string()).
+-type(attributename() :: binary()).
 
 % Structures used by XML serialization functions.
 -type(xmldefaultns()   :: xmlname() | [xmlname()]).
@@ -48,7 +49,7 @@
 % Attributes.
 -record(xmlattr, {
   ns = undefined   :: xmlname() | undefined,
-  name             :: xmlname(),
+  name             :: attributename(),
   value            :: binary()
 }).
 -type(xmlattr() :: #xmlattr{}).

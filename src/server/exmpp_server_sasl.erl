@@ -35,8 +35,10 @@
 -export([
 	 challenge/1,
 	 success/0,
+	 success/1,
 	 failure/0,
 	 failure/1,
+	 failure/2,
 	 next_step/1
 	]).
 
@@ -92,16 +94,26 @@ standard_conditions() ->
      {'invalid-mechanism'},
      {'mechanism-too-weak'},
      {'not-authorized'},
-     {'temporary-auth-failure'}
+     {'temporary-auth-failure'},
+     %% rfc3920bis
+     {'account-disabled'},
+     {'credentials-expired'},
+     {'encryption-required'},
+     {'malformed-request'},
+     {'undefined-condition'}
     ].
 
 %% @spec (Challenge) -> Challenge_El
-%%     Challenge = string()
+%%     Challenge = string() | none
 %%     Challenge_El = exmpp_xml:xmlel()
 %% @doc Prepare a `<challenge/>' element with the given challenge.
 %%
 %% `Challenge' will be Base64-encoded by this function.
 
+challenge(none) ->
+    #xmlel{ns = ?NS_SASL,
+	   name = 'challenge'
+	  };
 challenge(Challenge) ->
     El = #xmlel{ns = ?NS_SASL,
 		name = 'challenge'
@@ -113,9 +125,23 @@ challenge(Challenge) ->
 %% @doc Prepare a `<success/>' element.
 
 success() ->
+    success(none).
+
+%% @spec (Data) -> Success_El
+%%     Data = string() | none
+%%     Success_El = exmpp_xml:xmlel()
+%% @doc Prepare a `<success/>' element with supplied XML character data.
+%% `Data' will be Base64-encoded by this function.
+
+success(none) ->
     #xmlel{ns = ?NS_SASL,
 	   name = 'success'
-	  }.
+	  };
+success(Data) ->
+    El = #xmlel{ns = ?NS_SASL,
+		name = 'success'
+	       },
+    exmpp_xml:set_cdata(El, base64:encode_to_string(Data)).
 
 %% @spec () -> Failure
 %%     Failure = exmpp_xml:xmlel()
@@ -129,7 +155,7 @@ failure() ->
 %% @spec (Condition) -> Failure
 %%     Condition = atom()
 %%     Failure = exmpp_xml:xmlel()
-%% @doc Prepare a `<failure/>' element.
+%% @doc Prepare a `<failure/>' element with a defined condition.
 
 failure(Condition) ->
     case lists:keymember(Condition, 1, standard_conditions()) of
@@ -140,6 +166,28 @@ failure(Condition) ->
 			  name = Condition
 			 },
     exmpp_xml:append_child(failure(), Condition_El).
+
+%% @spec (Condition, Text) -> Failure
+%%     Condition = atom()
+%%     Text = string()
+%%     Failure = exmpp_xml:xmlel()
+%% @doc Prepare a `<failure/>' element with a defined condition and text.
+
+failure(Condition, "") ->
+    failure(Condition);
+failure(Condition, Text) ->
+    case lists:keymember(Condition, 1, standard_conditions()) of
+        true  -> ok;
+        false -> throw({sasl, failure, invalid_condition, Condition})
+    end,
+    Condition_El = #xmlel{ns = ?NS_SASL,
+			  name = Condition
+			 },
+    Text_El = #xmlel{ns = ?NS_SASL,
+			  name = text,
+			  children = exmpp_xml:cdata(Text)
+			 },
+    exmpp_xml:append_children(failure(), [Condition_El, Text_El]).
 
 %% @spec (El) -> Type
 %%     El = exmpp_xml:xmlel()
@@ -154,7 +202,7 @@ failure(Condition) ->
 %% Any response data is Base64-decoded.
 
 next_step(#xmlel{ns = ?NS_SASL, name = 'auth'} = El) ->
-    Mechanism = exmpp_xml:get_attribute_as_list(El, 'mechanism', undefined),
+    Mechanism = exmpp_xml:get_attribute_as_list(El, <<"mechanism">>, undefined),
     case exmpp_utils:strip(exmpp_xml:get_cdata_as_list(El)) of
         ""      -> {auth, Mechanism, none};
         "="     -> {auth, Mechanism, ""};
